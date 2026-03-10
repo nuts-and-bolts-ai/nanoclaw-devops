@@ -10,6 +10,10 @@ import {
   TRIGGER_PATTERN,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
+import {
+  startDashboardServer,
+  stopDashboardServer,
+} from './dashboard-server.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -21,6 +25,7 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
+import { writeDashboardSnapshot } from './dashboard-data.js';
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
@@ -314,6 +319,9 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
+  // Write dashboard snapshot for container to read
+  writeDashboardSnapshot(group.folder, isMain, queue);
+
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
@@ -517,10 +525,14 @@ async function main(): Promise<void> {
     PROXY_BIND_HOST,
   );
 
+  // Start dashboard server (serves temp HTML pages)
+  await startDashboardServer();
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
+    await stopDashboardServer();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
