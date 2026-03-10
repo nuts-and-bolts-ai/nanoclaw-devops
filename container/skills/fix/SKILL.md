@@ -42,10 +42,23 @@ ssh -i /workspace/extra/ssh-keys/<key> -o StrictHostKeyChecking=no <user>@<ip> \
 
 ### 3. Develop the Fix
 
-Create a fix branch and make changes:
+Clone or update the instance repo to a writable location (the project mount at `/workspace/project` is read-only):
 
 ```bash
-cd /workspace/project
+# Load instance details from registry
+REPO=$(cat /workspace/group/instance-registry.json | jq -r '.instances.<instance>.repo')
+
+mkdir -p /workspace/group/repos
+cd /workspace/group/repos
+if [ -d "<instance>" ]; then
+  cd <instance> && git checkout main && git pull
+else
+  gh repo clone "$REPO" <instance>
+  cd <instance>
+fi
+
+git config user.name "DevOps (NanoClaw)"
+git config user.email "devops@nanoclaw.bot"
 git checkout -b fix/<descriptive-name>
 ```
 
@@ -64,7 +77,6 @@ npm test 2>/dev/null || echo "No tests configured"
 Push the branch and create a PR:
 
 ```bash
-cd /workspace/project
 git add -A
 git commit -m "fix: <concise description of what was fixed>"
 git push origin fix/<descriptive-name>

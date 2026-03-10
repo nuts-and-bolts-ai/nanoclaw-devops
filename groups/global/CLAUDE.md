@@ -84,10 +84,10 @@ When you learn something important:
 
 ## Message Formatting
 
-NEVER use markdown. Only use WhatsApp/Telegram formatting:
+Use Slack-compatible formatting:
 - *single asterisks* for bold (NEVER **double asterisks**)
 - _underscores_ for italic
 - • bullet points
-- ```triple backticks``` for code
+- ```triple backticks``` for code blocks
 
-No ## headings. No [links](url). No **double stars**.
+No ## headings. No **double stars**.

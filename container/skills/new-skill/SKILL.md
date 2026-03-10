@@ -64,8 +64,23 @@ Key principles:
 
 ### 3. Create the PR
 
+Clone or update the instance repo to a writable location (the project mount at `/workspace/project` is read-only):
+
 ```bash
-cd /workspace/project
+# Load instance details from registry
+REPO=$(cat /workspace/group/instance-registry.json | jq -r '.instances.<instance>.repo')
+
+mkdir -p /workspace/group/repos
+cd /workspace/group/repos
+if [ -d "<instance>" ]; then
+  cd <instance> && git checkout main && git pull
+else
+  gh repo clone "$REPO" <instance>
+  cd <instance>
+fi
+
+git config user.name "DevOps (NanoClaw)"
+git config user.email "devops@nanoclaw.bot"
 git checkout -b feat/skill-<name>
 ```
 

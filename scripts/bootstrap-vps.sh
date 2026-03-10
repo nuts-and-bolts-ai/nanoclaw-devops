@@ -141,7 +141,7 @@ systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
 log "Creating systemd service..."
 cat > /etc/systemd/system/nanoclaw.service << 'SERVICE'
 [Unit]
-Description=NanoClaw WhatsApp Agent
+Description=NanoClaw Agent
 After=network.target docker.service
 Wants=docker.service
 
