@@ -349,6 +349,30 @@ export class GroupQueue {
     }
   }
 
+  getActiveGroups(): Array<{
+    groupJid: string;
+    containerName: string | null;
+    groupFolder: string | null;
+    isIdle: boolean;
+    isTask: boolean;
+    runningTaskId: string | null;
+  }> {
+    const result = [];
+    for (const [jid, state] of this.groups) {
+      if (state.active) {
+        result.push({
+          groupJid: jid,
+          containerName: state.containerName,
+          groupFolder: state.groupFolder,
+          isIdle: state.idleWaiting,
+          isTask: state.isTaskContainer,
+          runningTaskId: state.runningTaskId,
+        });
+      }
+    }
+    return result;
+  }
+
   async shutdown(_gracePeriodMs: number): Promise<void> {
     this.shuttingDown = true;
 
