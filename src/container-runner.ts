@@ -18,7 +18,12 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
-import { resolveGroupFolderPath, resolveGroupIpcPath, resolveThreadGroupPath, resolveThreadIpcPath } from './group-folder.js';
+import {
+  resolveGroupFolderPath,
+  resolveGroupIpcPath,
+  resolveThreadGroupPath,
+  resolveThreadIpcPath,
+} from './group-folder.js';
 import { logger } from './logger.js';
 import {
   CONTAINER_HOST_GATEWAY,
@@ -69,8 +74,12 @@ function buildVolumeMounts(
   const groupDir = resolveGroupFolderPath(group.folder);
 
   // Thread-scoped directories (when processing a specific Slack thread)
-  const threadGroupDir = threadTs ? resolveThreadGroupPath(group.folder, threadTs) : null;
-  const threadIpcDir = threadTs ? resolveThreadIpcPath(group.folder, threadTs) : null;
+  const threadGroupDir = threadTs
+    ? resolveThreadGroupPath(group.folder, threadTs)
+    : null;
+  const threadIpcDir = threadTs
+    ? resolveThreadIpcPath(group.folder, threadTs)
+    : null;
 
   if (isMain) {
     // Main gets the project root read-only. Writable paths the agent needs
@@ -148,7 +157,14 @@ function buildVolumeMounts(
 
   // For thread sessions, use thread-scoped sessions directory
   const effectiveSessionsDir = threadTs
-    ? path.join(DATA_DIR, 'sessions', group.folder, 'threads', threadTs, '.claude')
+    ? path.join(
+        DATA_DIR,
+        'sessions',
+        group.folder,
+        'threads',
+        threadTs,
+        '.claude',
+      )
     : groupSessionsDir;
   if (threadTs) {
     fs.mkdirSync(effectiveSessionsDir, { recursive: true });
@@ -199,7 +215,9 @@ function buildVolumeMounts(
   // For thread sessions, copy skills into the thread sessions dir too
   if (threadTs && fs.existsSync(path.join(groupSessionsDir, 'skills'))) {
     const threadSkillsDst = path.join(effectiveSessionsDir, 'skills');
-    fs.cpSync(path.join(groupSessionsDir, 'skills'), threadSkillsDst, { recursive: true });
+    fs.cpSync(path.join(groupSessionsDir, 'skills'), threadSkillsDst, {
+      recursive: true,
+    });
   }
 
   mounts.push({
@@ -260,6 +278,7 @@ function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  groupFolder: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -271,6 +290,9 @@ function buildContainerArgs(
     '-e',
     `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
   );
+
+  // Pass group folder so the proxy can track per-group API usage via custom header
+  args.push('-e', `NANOCLAW_GROUP_FOLDER=${groupFolder}`);
 
   // Mirror the host's auth method with a placeholder value.
   // API key mode: SDK sends x-api-key, proxy replaces with real key.
@@ -331,13 +353,17 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const { mounts, skillsChanged } = buildVolumeMounts(group, input.isMain, input.threadTs);
+  const { mounts, skillsChanged } = buildVolumeMounts(
+    group,
+    input.isMain,
+    input.threadTs,
+  );
   if (skillsChanged) {
     input.sessionId = undefined;
   }
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(mounts, containerName, group.folder);
 
   logger.debug(
     {
