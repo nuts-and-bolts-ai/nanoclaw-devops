@@ -42,3 +42,28 @@ export function resolveGroupIpcPath(folder: string): string {
   ensureWithinBase(ipcBaseDir, ipcPath);
   return ipcPath;
 }
+
+const THREAD_TS_PATTERN = /^\d+\.\d+$/;
+
+function assertValidThreadTs(threadTs: string): void {
+  if (!THREAD_TS_PATTERN.test(threadTs)) {
+    throw new Error(`Invalid thread_ts "${threadTs}"`);
+  }
+}
+
+export function resolveThreadGroupPath(folder: string, threadTs: string): string {
+  assertValidGroupFolder(folder);
+  assertValidThreadTs(threadTs);
+  const threadPath = path.resolve(GROUPS_DIR, folder, 'threads', threadTs);
+  ensureWithinBase(GROUPS_DIR, threadPath);
+  return threadPath;
+}
+
+export function resolveThreadIpcPath(folder: string, threadTs: string): string {
+  assertValidGroupFolder(folder);
+  assertValidThreadTs(threadTs);
+  const ipcBaseDir = path.resolve(DATA_DIR, 'ipc');
+  const threadIpcPath = path.resolve(ipcBaseDir, folder, 'threads', threadTs);
+  ensureWithinBase(ipcBaseDir, threadIpcPath);
+  return threadIpcPath;
+}

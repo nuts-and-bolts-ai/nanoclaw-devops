@@ -144,6 +144,105 @@ export function startIpcWatcher(deps: IpcDeps): void {
       } catch (err) {
         logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
       }
+
+      // Scan thread-scoped IPC directories
+      const threadsDir = path.join(ipcBaseDir, sourceGroup, 'threads');
+      try {
+        if (fs.existsSync(threadsDir)) {
+          const threadDirs = fs.readdirSync(threadsDir).filter((f) => {
+            try {
+              return fs.statSync(path.join(threadsDir, f)).isDirectory();
+            } catch { return false; }
+          });
+
+          for (const threadTs of threadDirs) {
+            const threadMessagesDir = path.join(threadsDir, threadTs, 'messages');
+            const threadTasksDir = path.join(threadsDir, threadTs, 'tasks');
+
+            // Process thread messages
+            try {
+              if (fs.existsSync(threadMessagesDir)) {
+                const messageFiles = fs
+                  .readdirSync(threadMessagesDir)
+                  .filter((f) => f.endsWith('.json'));
+                for (const file of messageFiles) {
+                  const filePath = path.join(threadMessagesDir, file);
+                  try {
+                    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+                    if (data.type === 'message' && data.chatJid && data.text) {
+                      const targetGroup = registeredGroups[data.chatJid];
+                      if (
+                        isMain ||
+                        (targetGroup && targetGroup.folder === sourceGroup)
+                      ) {
+                        await deps.sendMessage(data.chatJid, data.text);
+                        logger.info(
+                          { chatJid: data.chatJid, sourceGroup, threadTs },
+                          'IPC thread message sent',
+                        );
+                      } else {
+                        logger.warn(
+                          { chatJid: data.chatJid, sourceGroup, threadTs },
+                          'Unauthorized IPC thread message attempt blocked',
+                        );
+                      }
+                    }
+                    fs.unlinkSync(filePath);
+                  } catch (err) {
+                    logger.error(
+                      { file, sourceGroup, threadTs, err },
+                      'Error processing IPC thread message',
+                    );
+                    const errorDir = path.join(ipcBaseDir, 'errors');
+                    fs.mkdirSync(errorDir, { recursive: true });
+                    fs.renameSync(
+                      filePath,
+                      path.join(errorDir, `${sourceGroup}-thread-${threadTs}-${file}`),
+                    );
+                  }
+                }
+              }
+            } catch (err) {
+              logger.error(
+                { err, sourceGroup, threadTs },
+                'Error reading IPC thread messages directory',
+              );
+            }
+
+            // Process thread tasks
+            try {
+              if (fs.existsSync(threadTasksDir)) {
+                const taskFiles = fs
+                  .readdirSync(threadTasksDir)
+                  .filter((f) => f.endsWith('.json'));
+                for (const file of taskFiles) {
+                  const filePath = path.join(threadTasksDir, file);
+                  try {
+                    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+                    await processTaskIpc(data, sourceGroup, isMain, deps);
+                    fs.unlinkSync(filePath);
+                  } catch (err) {
+                    logger.error(
+                      { file, sourceGroup, threadTs, err },
+                      'Error processing IPC thread task',
+                    );
+                    const errorDir = path.join(ipcBaseDir, 'errors');
+                    fs.mkdirSync(errorDir, { recursive: true });
+                    fs.renameSync(
+                      filePath,
+                      path.join(errorDir, `${sourceGroup}-thread-${threadTs}-${file}`),
+                    );
+                  }
+                }
+              }
+            } catch (err) {
+              logger.error({ err, sourceGroup, threadTs }, 'Error reading IPC thread tasks directory');
+            }
+          }
+        }
+      } catch (err) {
+        logger.error({ err, sourceGroup }, 'Error scanning thread IPC directories');
+      }
     }
 
     setTimeout(processIpcFiles, IPC_POLL_INTERVAL);

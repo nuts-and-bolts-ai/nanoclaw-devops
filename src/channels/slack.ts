@@ -37,6 +37,7 @@ export class SlackChannel implements Channel {
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
   private userNameCache = new Map<string, string>();
+  private threadTargets = new Map<string, string>(); // jid -> thread_ts for in-thread replies
 
   private opts: SlackChannelOpts;
 
@@ -120,6 +121,9 @@ export class SlackChannel implements Channel {
         }
       }
 
+      // Extract thread_ts: if the message is in a thread, use the parent thread_ts
+      const threadTs = (msg as GenericMessageEvent).thread_ts;
+
       this.opts.onMessage(jid, {
         id: msg.ts,
         chat_jid: jid,
@@ -129,6 +133,7 @@ export class SlackChannel implements Channel {
         timestamp,
         is_from_me: isBotMessage,
         is_bot_message: isBotMessage,
+        thread_ts: threadTs,
       });
     });
   }
@@ -156,7 +161,7 @@ export class SlackChannel implements Channel {
     await this.syncChannelMetadata();
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(jid: string, text: string, threadTs?: string): Promise<void> {
     const channelId = jid.replace(/^slack:/, '');
 
     if (!this.connected) {
@@ -169,14 +174,18 @@ export class SlackChannel implements Channel {
     }
 
     try {
+      // Use explicitly passed threadTs (concurrent sessions), fall back to tracked target
+      const thread_ts = threadTs ?? this.threadTargets.get(jid);
+
       // Slack limits messages to ~4000 characters; split if needed
       if (text.length <= MAX_MESSAGE_LENGTH) {
-        await this.app.client.chat.postMessage({ channel: channelId, text });
+        await this.app.client.chat.postMessage({ channel: channelId, text, thread_ts });
       } else {
         for (let i = 0; i < text.length; i += MAX_MESSAGE_LENGTH) {
           await this.app.client.chat.postMessage({
             channel: channelId,
             text: text.slice(i, i + MAX_MESSAGE_LENGTH),
+            thread_ts,
           });
         }
       }

@@ -430,6 +430,7 @@ describe('message query LIMIT', () => {
       'group@g.us',
       '2024-01-01T00:00:00.000Z',
       'Andy',
+      undefined,
       3,
     );
     expect(messages).toHaveLength(3);

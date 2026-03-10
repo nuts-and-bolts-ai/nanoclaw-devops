@@ -33,6 +33,7 @@ export class GroupQueue {
   private waitingGroups: string[] = [];
   private processMessagesFn: ((groupJid: string) => Promise<boolean>) | null =
     null;
+  private folderResolver: ((sessionKey: string) => string) | null = null;
   private shuttingDown = false;
 
   private getGroup(groupJid: string): GroupState {
@@ -57,6 +58,10 @@ export class GroupQueue {
 
   setProcessMessagesFn(fn: (groupJid: string) => Promise<boolean>): void {
     this.processMessagesFn = fn;
+  }
+
+  setFolderResolver(fn: (sessionKey: string) => string): void {
+    this.folderResolver = fn;
   }
 
   enqueueMessageCheck(groupJid: string): void {
@@ -157,7 +162,7 @@ export class GroupQueue {
    * Send a follow-up message to the active container via IPC file.
    * Returns true if the message was written, false if no active container.
    */
-  sendMessage(groupJid: string, text: string): boolean {
+  sendMessage(groupJid: string, text: string, _threadTs?: string): boolean {
     const state = this.getGroup(groupJid);
     if (!state.active || !state.groupFolder || state.isTaskContainer)
       return false;
