@@ -101,8 +101,10 @@ ufw --force reset
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow ssh
+# Allow Docker containers to reach the credential proxy on the host
+ufw allow from 172.17.0.0/16 to any port 3001
 ufw --force enable
-log "Firewall enabled: SSH only"
+log "Firewall enabled: SSH + Docker bridge to credential proxy"
 
 # --- Configure fail2ban ---
 
