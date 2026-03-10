@@ -13,9 +13,11 @@ logs/
 groups/*
 !groups/main/
 !groups/global/
+!groups/templates/
 groups/main/*
 groups/global/*
 !groups/main/CLAUDE.md
+!groups/main/instance-registry.json
 !groups/global/CLAUDE.md
 
 # Secrets
