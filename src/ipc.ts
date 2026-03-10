@@ -22,6 +22,14 @@ export interface IpcDeps {
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
   ) => void;
+  getActiveAgents: () => Array<{
+    groupJid: string;
+    containerName: string | null;
+    groupFolder: string | null;
+    isIdle: boolean;
+    isTask: boolean;
+    runningTaskId: string | null;
+  }>;
 }
 
 let ipcWatcherRunning = false;
@@ -181,7 +189,11 @@ export function startIpcWatcher(deps: IpcDeps): void {
                         isMain ||
                         (targetGroup && targetGroup.folder === sourceGroup)
                       ) {
-                        await deps.sendMessage(data.chatJid, data.text, threadTs);
+                        await deps.sendMessage(
+                          data.chatJid,
+                          data.text,
+                          threadTs,
+                        );
                         logger.info(
                           { chatJid: data.chatJid, sourceGroup, threadTs },
                           'IPC thread message sent',
@@ -565,6 +577,38 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'open_dashboard': {
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized open_dashboard attempt blocked',
+        );
+        break;
+      }
+
+      try {
+        const { createDashboardPage } = await import('./dashboard-server.js');
+        const { getDashboardData } = await import('./dashboard-data.js');
+
+        const dashData = getDashboardData(deps.getActiveAgents);
+        const url = createDashboardPage(dashData);
+
+        // Write URL back to IPC for the container to read
+        const responseFile = path.join(
+          DATA_DIR,
+          'ipc',
+          sourceGroup,
+          'dashboard_url.txt',
+        );
+        fs.writeFileSync(responseFile, url);
+
+        logger.info({ url, sourceGroup }, 'Dashboard page created');
+      } catch (err) {
+        logger.error({ err, sourceGroup }, 'Error creating dashboard page');
+      }
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

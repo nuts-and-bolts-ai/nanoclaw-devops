@@ -627,6 +627,7 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
+    getActiveAgents: () => queue.getActiveGroups(),
   });
   queue.setProcessMessagesFn(processGroupMessages);
   queue.setFolderResolver((sessionKey: string) => {
