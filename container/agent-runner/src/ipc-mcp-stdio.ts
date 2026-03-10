@@ -333,6 +333,212 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+// --- Dashboard formatting helpers ---
+
+function formatCostData(cost: any): string {
+  const monthly = cost.this_month;
+  const lines = [
+    `Cost this month: $${monthly.total_usd.toFixed(2)} (${monthly.request_count} API calls)`,
+    `  Input tokens: ${monthly.total_input_tokens.toLocaleString()}`,
+    `  Output tokens: ${monthly.total_output_tokens.toLocaleString()}`,
+    `  Cache creation: ${monthly.total_cache_creation_tokens.toLocaleString()}`,
+    `  Cache read: ${monthly.total_cache_read_tokens.toLocaleString()}`,
+    '',
+    'Daily breakdown by group:',
+  ];
+
+  const byDate = new Map<string, Array<{ group: string; cost: number; requests: number }>>();
+  for (const row of cost.daily_by_group) {
+    const entries = byDate.get(row.date) || [];
+    entries.push({ group: row.group_folder, cost: row.cost_usd, requests: row.request_count });
+    byDate.set(row.date, entries);
+  }
+
+  for (const [date, entries] of byDate) {
+    const dayTotal = entries.reduce((sum: number, e: { cost: number }) => sum + e.cost, 0);
+    lines.push(`  ${date}: $${dayTotal.toFixed(2)}`);
+    for (const entry of entries) {
+      lines.push(`    ${entry.group}: $${entry.cost.toFixed(2)} (${entry.requests} calls)`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function formatActivityData(events: any[]): string {
+  if (events.length === 0) return 'No activity in the last 48 hours.';
+
+  const byGroup = new Map<string, any[]>();
+  for (const event of events) {
+    const key = event.group_name || event.group_folder || 'unknown';
+    const list = byGroup.get(key) || [];
+    list.push(event);
+    byGroup.set(key, list);
+  }
+
+  const lines = ['Activity feed (last 48 hours):'];
+  for (const [group, groupEvents] of byGroup) {
+    lines.push(`\n${group}:`);
+    for (const event of groupEvents.slice(0, 50)) {
+      const time = new Date(event.timestamp).toLocaleString();
+      const icon = event.event_type === 'message_received' ? '->'
+                 : event.event_type === 'agent_responded' ? '<-'
+                 : event.event_type === 'task_ran' ? '[task]' : '-';
+      lines.push(`  ${time} ${icon} ${event.summary}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function formatAgentsData(agents: any[]): string {
+  if (agents.length === 0) return 'No active agent containers right now.';
+
+  const lines = ['Active agents:'];
+  for (const agent of agents) {
+    const status = agent.is_idle ? 'idle' : agent.is_task ? `running task ${agent.running_task_id}` : 'processing';
+    lines.push(`  ${agent.group_name || agent.group_folder}: ${status}`);
+    if (agent.container_name) lines.push(`    Container: ${agent.container_name}`);
+  }
+
+  return lines.join('\n');
+}
+
+function formatTasksData(tasks: any[]): string {
+  if (tasks.length === 0) return 'No scheduled tasks.';
+
+  const lines = ['Scheduled tasks:'];
+  for (const task of tasks) {
+    const promptPreview = task.prompt.length > 60 ? task.prompt.slice(0, 60) + '...' : task.prompt;
+    lines.push(`  [${task.status}] ${promptPreview}`);
+    lines.push(`    ID: ${task.id}`);
+    lines.push(`    Schedule: ${task.schedule_type} -- ${task.schedule_value}`);
+    lines.push(`    Next run: ${task.next_run || 'N/A'}`);
+    if (task.recent_runs && task.recent_runs.length > 0) {
+      const lastRun = task.recent_runs[0];
+      lines.push(`    Last run: ${lastRun.run_at} (${lastRun.status}, ${lastRun.duration_ms}ms)`);
+      if (lastRun.error) lines.push(`    Error: ${lastRun.error}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function formatSummary(snapshot: any): string {
+  const cost = snapshot.cost.this_month;
+  const activeCount = snapshot.active_agents.length;
+  const taskCount = snapshot.tasks.length;
+  const activeTaskCount = snapshot.tasks.filter((t: any) => t.status === 'active').length;
+  const eventCount = snapshot.activity.length;
+
+  return [
+    `NanoClaw Dashboard Summary (${new Date(snapshot.generated_at).toLocaleString()})`,
+    '',
+    `Cost this month: $${cost.total_usd.toFixed(2)} across ${cost.request_count} API calls`,
+    `Active agents: ${activeCount}`,
+    `Scheduled tasks: ${activeTaskCount} active / ${taskCount} total`,
+    `Activity events (48hr): ${eventCount}`,
+    '',
+    'Use query_dashboard with "cost", "activity", "agents", or "tasks" for details.',
+  ].join('\n');
+}
+
+// --- Dashboard MCP tool ---
+
+server.tool(
+  'query_dashboard',
+  `Query NanoClaw dashboard data. Returns cost tracking, activity feed, active agents, and scheduled tasks.
+Available queries:
+- "cost" -- This month's total cost and daily breakdown by group
+- "activity" -- Chronological feed of events from the last 48 hours
+- "agents" -- Currently active agent containers
+- "tasks" -- All scheduled tasks with recent run history
+- "summary" -- Brief overview of all sections`,
+  {
+    query: z.enum(['cost', 'activity', 'agents', 'tasks', 'summary']).describe('What dashboard data to return'),
+  },
+  async (args) => {
+    const snapshotFile = path.join(IPC_DIR, 'dashboard_snapshot.json');
+
+    try {
+      if (!fs.existsSync(snapshotFile)) {
+        return { content: [{ type: 'text' as const, text: 'Dashboard data not available. This may be because no API calls have been tracked yet.' }] };
+      }
+
+      const snapshot = JSON.parse(fs.readFileSync(snapshotFile, 'utf-8'));
+      let result = '';
+
+      switch (args.query) {
+        case 'cost':
+          result = formatCostData(snapshot.cost);
+          break;
+        case 'activity':
+          result = formatActivityData(snapshot.activity);
+          break;
+        case 'agents':
+          result = formatAgentsData(snapshot.active_agents);
+          break;
+        case 'tasks':
+          result = formatTasksData(snapshot.tasks);
+          break;
+        case 'summary':
+          result = formatSummary(snapshot);
+          break;
+      }
+
+      return { content: [{ type: 'text' as const, text: result }] };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Error reading dashboard: ${err instanceof Error ? err.message : String(err)}` }],
+      };
+    }
+  },
+);
+
+server.tool(
+  'open_dashboard',
+  'Generate a full visual dashboard page with cost charts, activity feed, active agents, and tasks. Returns a temporary URL that expires after 30 minutes. Use this when the user wants to see a visual dashboard or asks for charts/graphs.',
+  {},
+  async () => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group can open the dashboard.' }],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'open_dashboard',
+      groupFolder,
+      isMain: String(isMain),
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    // Wait for the host to process and write the URL back
+    const responseFile = path.join(IPC_DIR, 'dashboard_url.txt');
+    const maxWait = 10000; // 10 seconds
+    const pollInterval = 200;
+    let waited = 0;
+
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const url = fs.readFileSync(responseFile, 'utf-8').trim();
+        fs.unlinkSync(responseFile);
+        return { content: [{ type: 'text' as const, text: `Dashboard ready: ${url}` }] };
+      }
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+      waited += pollInterval;
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: 'Dashboard generation timed out. The host may not support this feature yet.' }],
+      isError: true,
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
