@@ -464,35 +464,14 @@ function createSSEInterceptor(groupFolder: string | null): Transform {
 }
 ```
 
-**Step 2: Add group folder extraction and SSE interception to the proxy handler**
+**Step 2: Add SSE interception to the proxy handler**
 
-In the proxy handler, after the `delete headers['transfer-encoding'];` line (line 63), add:
-```typescript
+Note: The original PR used a URL path prefix to identify the group, but that broke the SDK. For now, `groupFolder` is always `null` — per-group attribution will be added later via a custom header approach. The SSE interceptor still tracks total costs correctly.
 
-        // Extract group folder from URL path prefix and strip it before forwarding
-        let groupFolder: string | null = null;
-        let upstreamPath = req.url || '/';
-
-        const proxyMatch = upstreamPath.match(/^\/proxy\/([^/]+)(\/.*)/);
-        if (proxyMatch) {
-          groupFolder = decodeURIComponent(proxyMatch[1]);
-          upstreamPath = proxyMatch[2];
-        }
-```
-
-Then update the upstream request to use `upstreamPath` instead of `req.url`. Replace:
-```typescript
-            path: req.url,
-```
-with:
-```typescript
-            path: upstreamPath,
-```
-
-And add the messages endpoint detection + SSE interception. Before the `const upstream = makeRequest(` line, add:
+In the proxy handler, before the `const upstream = makeRequest(` line, add:
 ```typescript
         const isMessagesEndpoint =
-          req.method === 'POST' && upstreamPath.endsWith('/v1/messages');
+          req.method === 'POST' && (req.url || '').endsWith('/v1/messages');
 ```
 
 Replace the response handler:
@@ -507,7 +486,7 @@ with:
           (upRes) => {
             res.writeHead(upRes.statusCode!, upRes.headers);
             if (isMessagesEndpoint) {
-              const interceptor = createSSEInterceptor(groupFolder);
+              const interceptor = createSSEInterceptor(null);
               upRes.pipe(interceptor).pipe(res);
             } else {
               upRes.pipe(res);
@@ -534,13 +513,15 @@ git commit -m "feat: track per-group API usage costs via SSE interceptor"
 
 ---
 
-### Task 7: Update container-runner to pass groupFolder to proxy URL
+### Task 7: Update container-runner to pass groupFolder as env var
 
-**Source:** assistant PR #1
+**Source:** assistant PR #1 + revert `cb5adec`
+
+The original PR used a URL path prefix (`/proxy/{group}`) for per-group cost tracking, but this broke the Claude Code SDK's URL construction. The revert passes the group folder as an env var instead. The proxy doesn't read it yet (group attribution will be `null`), but the plumbing is in place for a future header-based approach.
 
 **Files:**
 - Modify: `src/container-runner.ts:278-281` (buildContainerArgs signature)
-- Modify: `src/container-runner.ts:288-290` (ANTHROPIC_BASE_URL)
+- Modify: `src/container-runner.ts:288-290` (add env var after ANTHROPIC_BASE_URL)
 - Modify: `src/container-runner.ts:362` (buildContainerArgs call)
 
 **Step 1: Add groupFolder parameter to buildContainerArgs**
@@ -561,22 +542,13 @@ function buildContainerArgs(
 ): string[] {
 ```
 
-**Step 2: Update ANTHROPIC_BASE_URL to include group folder**
+**Step 2: Add NANOCLAW_GROUP_FOLDER env var after ANTHROPIC_BASE_URL**
 
-Replace lines 288-290:
+After the existing `ANTHROPIC_BASE_URL` push (lines 288-290, leave them unchanged), add:
 ```typescript
-  args.push(
-    '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-  );
-```
-with:
-```typescript
-  // The group folder is encoded in the URL path so the proxy can track per-group API usage
-  args.push(
-    '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}/proxy/${encodeURIComponent(groupFolder)}`,
-  );
+
+  // Pass group folder so the proxy can track per-group API usage via custom header
+  args.push('-e', `NANOCLAW_GROUP_FOLDER=${groupFolder}`);
 ```
 
 **Step 3: Update the call site**
@@ -599,7 +571,7 @@ Expected: Clean compilation
 
 ```bash
 git add src/container-runner.ts
-git commit -m "feat: pass group folder to credential proxy for cost tracking"
+git commit -m "feat: pass group folder env var to containers for future cost attribution"
 ```
 
 ---
