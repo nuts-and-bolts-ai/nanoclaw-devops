@@ -13,9 +13,126 @@
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
+import { Transform } from 'stream';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+import { logApiUsage } from './db.js';
+
+// Pricing per million tokens (as of 2026-03 for Claude models)
+const PRICING: Record<
+  string,
+  { input: number; output: number; cacheWrite: number; cacheRead: number }
+> = {
+  'claude-sonnet-4-6': {
+    input: 3,
+    output: 15,
+    cacheWrite: 3.75,
+    cacheRead: 0.3,
+  },
+  'claude-opus-4-6': {
+    input: 15,
+    output: 75,
+    cacheWrite: 18.75,
+    cacheRead: 1.5,
+  },
+  'claude-haiku-4-5': {
+    input: 0.8,
+    output: 4,
+    cacheWrite: 1,
+    cacheRead: 0.08,
+  },
+};
+
+function estimateCost(
+  model: string | null,
+  inputTokens: number,
+  outputTokens: number,
+  cacheCreationTokens: number,
+  cacheReadTokens: number,
+): number {
+  const pricing = model
+    ? Object.entries(PRICING).find(([key]) => model.startsWith(key))?.[1]
+    : null;
+
+  if (!pricing) return 0;
+
+  return (
+    (inputTokens * pricing.input +
+      outputTokens * pricing.output +
+      cacheCreationTokens * pricing.cacheWrite +
+      cacheReadTokens * pricing.cacheRead) /
+    1_000_000
+  );
+}
+
+function createSSEInterceptor(groupFolder: string | null): Transform {
+  let buffer = '';
+  let model: string | null = null;
+  let inputTokens = 0;
+  let cacheCreationTokens = 0;
+  let cacheReadTokens = 0;
+
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      this.push(chunk);
+
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const jsonStr = line.slice(6);
+        if (jsonStr === '[DONE]') continue;
+
+        try {
+          const event = JSON.parse(jsonStr);
+
+          if (event.type === 'message_start' && event.message) {
+            model = event.message.model || null;
+            const usage = event.message.usage;
+            if (usage) {
+              inputTokens = usage.input_tokens || 0;
+              cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+              cacheReadTokens = usage.cache_read_input_tokens || 0;
+            }
+          }
+
+          if (event.type === 'message_delta' && event.usage) {
+            const outputTokens = event.usage.output_tokens || 0;
+            const cost = estimateCost(
+              model,
+              inputTokens,
+              outputTokens,
+              cacheCreationTokens,
+              cacheReadTokens,
+            );
+
+            try {
+              logApiUsage({
+                timestamp: new Date().toISOString(),
+                group_folder: groupFolder,
+                model,
+                input_tokens: inputTokens,
+                output_tokens: outputTokens,
+                cache_creation_tokens: cacheCreationTokens,
+                cache_read_tokens: cacheReadTokens,
+                cost_usd: cost,
+              });
+            } catch (err) {
+              logger.warn({ err }, 'Failed to log API usage');
+            }
+          }
+        } catch {
+          // Not valid JSON, skip
+        }
+      }
+
+      callback();
+    },
+  });
+}
 
 export type AuthMode = 'api-key' | 'oauth';
 
@@ -79,6 +196,9 @@ export function startCredentialProxy(
           }
         }
 
+        const isMessagesEndpoint =
+          req.method === 'POST' && (req.url || '').endsWith('/v1/messages');
+
         const upstream = makeRequest(
           {
             hostname: upstreamUrl.hostname,
@@ -89,7 +209,12 @@ export function startCredentialProxy(
           } as RequestOptions,
           (upRes) => {
             res.writeHead(upRes.statusCode!, upRes.headers);
-            upRes.pipe(res);
+            if (isMessagesEndpoint) {
+              const interceptor = createSSEInterceptor(null);
+              upRes.pipe(interceptor).pipe(res);
+            } else {
+              upRes.pipe(res);
+            }
           },
         );
 
