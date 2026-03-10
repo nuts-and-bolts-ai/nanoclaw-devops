@@ -71,14 +71,19 @@ export class SlackChannel implements Channel {
     // message subtypes including bot_message (needed to track our own output)
     this.app.event('message', async ({ event }) => {
       // Bolt's event type is the full MessageEvent union (17+ subtypes).
-      // We filter on subtype first, then narrow to the two types we handle.
+      // We allow: regular messages (no subtype), bot_message, and file_share
+      // (image/file attachments). All other subtypes (channel_join, etc.) are ignored.
       const subtype = (event as { subtype?: string }).subtype;
-      if (subtype && subtype !== 'bot_message') return;
+      const allowedSubtypes = new Set([undefined, 'bot_message', 'file_share']);
+      if (!allowedSubtypes.has(subtype)) return;
 
       // After filtering, event is either GenericMessageEvent or BotMessageEvent
       const msg = event as HandledMessageEvent;
 
-      if (!msg.text) return;
+      // For file_share messages, Slack may put the text in a different field
+      // or the user may have sent only an image with no text
+      const files = (event as { files?: Array<{ name?: string; mimetype?: string; url_private?: string }> }).files;
+      if (!msg.text && (!files || files.length === 0)) return;
 
       // Threaded replies are flattened into the channel conversation.
       // The agent sees them alongside channel-level messages; responses
@@ -110,7 +115,16 @@ export class SlackChannel implements Channel {
       // Translate Slack <@UBOTID> mentions into TRIGGER_PATTERN format.
       // Slack encodes @mentions as <@U12345>, which won't match TRIGGER_PATTERN
       // (e.g., ^@<ASSISTANT_NAME>\b), so we prepend the trigger when the bot is @mentioned.
-      let content = msg.text;
+      let content = msg.text || '';
+
+      // Append file attachment info so the agent knows about shared images/files
+      if (files && files.length > 0) {
+        const fileDescriptions = files
+          .map((f) => `[Attached file: ${f.name || 'unknown'}${f.mimetype ? ` (${f.mimetype})` : ''}${f.url_private ? ` — ${f.url_private}` : ''}]`)
+          .join('\n');
+        content = content ? `${content}\n${fileDescriptions}` : fileDescriptions;
+      }
+
       if (this.botUserId && !isBotMessage) {
         const mentionPattern = `<@${this.botUserId}>`;
         if (
@@ -161,7 +175,11 @@ export class SlackChannel implements Channel {
     await this.syncChannelMetadata();
   }
 
-  async sendMessage(jid: string, text: string, threadTs?: string): Promise<void> {
+  async sendMessage(
+    jid: string,
+    text: string,
+    threadTs?: string,
+  ): Promise<void> {
     const channelId = jid.replace(/^slack:/, '');
 
     if (!this.connected) {
@@ -179,7 +197,11 @@ export class SlackChannel implements Channel {
 
       // Slack limits messages to ~4000 characters; split if needed
       if (text.length <= MAX_MESSAGE_LENGTH) {
-        await this.app.client.chat.postMessage({ channel: channelId, text, thread_ts });
+        await this.app.client.chat.postMessage({
+          channel: channelId,
+          text,
+          thread_ts,
+        });
       } else {
         for (let i = 0; i < text.length; i += MAX_MESSAGE_LENGTH) {
           await this.app.client.chat.postMessage({
