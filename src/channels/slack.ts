@@ -82,7 +82,15 @@ export class SlackChannel implements Channel {
 
       // For file_share messages, Slack may put the text in a different field
       // or the user may have sent only an image with no text
-      const files = (event as { files?: Array<{ name?: string; mimetype?: string; url_private?: string }> }).files;
+      const files = (
+        event as {
+          files?: Array<{
+            name?: string;
+            mimetype?: string;
+            url_private?: string;
+          }>;
+        }
+      ).files;
       if (!msg.text && (!files || files.length === 0)) return;
 
       // Threaded replies are flattened into the channel conversation.
@@ -120,9 +128,14 @@ export class SlackChannel implements Channel {
       // Append file attachment info so the agent knows about shared images/files
       if (files && files.length > 0) {
         const fileDescriptions = files
-          .map((f) => `[Attached file: ${f.name || 'unknown'}${f.mimetype ? ` (${f.mimetype})` : ''}${f.url_private ? ` — ${f.url_private}` : ''}]`)
+          .map(
+            (f) =>
+              `[Attached file: ${f.name || 'unknown'}${f.mimetype ? ` (${f.mimetype})` : ''}${f.url_private ? ` — ${f.url_private}` : ''}]`,
+          )
           .join('\n');
-        content = content ? `${content}\n${fileDescriptions}` : fileDescriptions;
+        content = content
+          ? `${content}\n${fileDescriptions}`
+          : fileDescriptions;
       }
 
       if (this.botUserId && !isBotMessage) {
@@ -192,8 +205,9 @@ export class SlackChannel implements Channel {
     }
 
     try {
-      // Use explicitly passed threadTs (concurrent sessions), fall back to tracked target
-      const thread_ts = threadTs ?? this.threadTargets.get(jid);
+      // Only thread when explicitly requested — no fallback to threadTargets.
+      // threadTargets is used for auto-trigger tracking, not for routing outbound messages.
+      const thread_ts = threadTs;
 
       // Slack limits messages to ~4000 characters; split if needed
       if (text.length <= MAX_MESSAGE_LENGTH) {

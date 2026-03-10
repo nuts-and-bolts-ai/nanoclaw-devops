@@ -11,7 +11,7 @@ import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (jid: string, text: string, threadTs?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -152,11 +152,17 @@ export function startIpcWatcher(deps: IpcDeps): void {
           const threadDirs = fs.readdirSync(threadsDir).filter((f) => {
             try {
               return fs.statSync(path.join(threadsDir, f)).isDirectory();
-            } catch { return false; }
+            } catch {
+              return false;
+            }
           });
 
           for (const threadTs of threadDirs) {
-            const threadMessagesDir = path.join(threadsDir, threadTs, 'messages');
+            const threadMessagesDir = path.join(
+              threadsDir,
+              threadTs,
+              'messages',
+            );
             const threadTasksDir = path.join(threadsDir, threadTs, 'tasks');
 
             // Process thread messages
@@ -175,7 +181,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                         isMain ||
                         (targetGroup && targetGroup.folder === sourceGroup)
                       ) {
-                        await deps.sendMessage(data.chatJid, data.text);
+                        await deps.sendMessage(data.chatJid, data.text, threadTs);
                         logger.info(
                           { chatJid: data.chatJid, sourceGroup, threadTs },
                           'IPC thread message sent',
@@ -197,7 +203,10 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     fs.mkdirSync(errorDir, { recursive: true });
                     fs.renameSync(
                       filePath,
-                      path.join(errorDir, `${sourceGroup}-thread-${threadTs}-${file}`),
+                      path.join(
+                        errorDir,
+                        `${sourceGroup}-thread-${threadTs}-${file}`,
+                      ),
                     );
                   }
                 }
@@ -230,18 +239,27 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     fs.mkdirSync(errorDir, { recursive: true });
                     fs.renameSync(
                       filePath,
-                      path.join(errorDir, `${sourceGroup}-thread-${threadTs}-${file}`),
+                      path.join(
+                        errorDir,
+                        `${sourceGroup}-thread-${threadTs}-${file}`,
+                      ),
                     );
                   }
                 }
               }
             } catch (err) {
-              logger.error({ err, sourceGroup, threadTs }, 'Error reading IPC thread tasks directory');
+              logger.error(
+                { err, sourceGroup, threadTs },
+                'Error reading IPC thread tasks directory',
+              );
             }
           }
         }
       } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error scanning thread IPC directories');
+        logger.error(
+          { err, sourceGroup },
+          'Error scanning thread IPC directories',
+        );
       }
     }
 
