@@ -6,6 +6,7 @@ import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+import { readEnvFile } from './env.js';
 import {
   CLAUDE_MODEL,
   CONTAINER_IMAGE,
@@ -242,6 +243,12 @@ function buildContainerArgs(
   // Pass model override if configured (e.g. claude-opus-4-6)
   if (CLAUDE_MODEL) {
     args.push('-e', `CLAUDE_MODEL=${CLAUDE_MODEL}`);
+  }
+
+  // Pass GitHub token so containers can use gh CLI for PRs
+  const { GH_TOKEN: ghToken } = readEnvFile(['GH_TOKEN']);
+  if (ghToken) {
+    args.push('-e', `GH_TOKEN=${ghToken}`);
   }
 
   // Runtime-specific args for host gateway resolution
