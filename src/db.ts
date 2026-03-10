@@ -65,6 +65,20 @@ function createSchema(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_task_run_logs ON task_run_logs(task_id, run_at);
 
+    CREATE TABLE IF NOT EXISTS api_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL,
+      group_folder TEXT,
+      model TEXT,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_usage_ts ON api_usage(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_api_usage_group ON api_usage(group_folder);
+
     CREATE TABLE IF NOT EXISTS router_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -121,9 +135,7 @@ function createSchema(database: Database.Database): void {
 
   // Add thread_ts column if it doesn't exist (migration for thread sessions)
   try {
-    database.exec(
-      `ALTER TABLE messages ADD COLUMN thread_ts TEXT`,
-    );
+    database.exec(`ALTER TABLE messages ADD COLUMN thread_ts TEXT`);
   } catch {
     /* column already exists */
   }
@@ -379,13 +391,15 @@ export function getMessagesSince(
       LIMIT ?
     ) ORDER BY timestamp
   `;
-  const params: (string | number)[] = [chatJid, sinceTimestamp, `${botPrefix}:%`];
+  const params: (string | number)[] = [
+    chatJid,
+    sinceTimestamp,
+    `${botPrefix}:%`,
+  ];
   if (threadTs !== undefined) params.push(threadTs);
   params.push(limit);
 
-  const rows = db
-    .prepare(sql)
-    .all(...params) as Array<
+  const rows = db.prepare(sql).all(...params) as Array<
     NewMessage & { thread_ts: string | null }
   >;
   return rows.map((row) => ({
@@ -663,6 +677,40 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     };
   }
   return result;
+}
+
+// --- API usage tracking ---
+
+export interface ApiUsageRecord {
+  timestamp: string;
+  group_folder: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number;
+}
+
+/** Expose the database instance for dashboard queries */
+export function getDb(): Database.Database {
+  return db;
+}
+
+export function logApiUsage(record: ApiUsageRecord): void {
+  db.prepare(
+    `INSERT INTO api_usage (timestamp, group_folder, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    record.timestamp,
+    record.group_folder,
+    record.model,
+    record.input_tokens,
+    record.output_tokens,
+    record.cache_creation_tokens,
+    record.cache_read_tokens,
+    record.cost_usd,
+  );
 }
 
 // --- JSON migration ---
