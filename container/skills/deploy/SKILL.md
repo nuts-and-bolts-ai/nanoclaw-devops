@@ -24,22 +24,27 @@ Ask the user:
 - Is there a specific PR or commit to deploy? (default: latest main)
 - Any reason to be cautious? (production vs staging)
 
-Look up the instance in the registry.
+Look up the instance in the registry. **Read the following fields for each instance:**
+- `install_path` — where NanoClaw is installed (e.g. `/opt/nanoclaw` or `~/nanoclaw-cheerful`)
+- `service_restart` — full command to restart the service (e.g. `systemctl restart nanoclaw` or `systemctl --user restart nanoclaw-cheerful`)
+- `service_check` — full command to check the service status (e.g. `systemctl is-active nanoclaw` or `systemctl --user is-active nanoclaw-cheerful`)
+
+If any of these fields are missing, fall back to `/opt/nanoclaw`, `systemctl restart nanoclaw`, and `systemctl is-active nanoclaw` respectively, and warn the user that the registry entry should be updated.
 
 ### 2. Pre-Deploy Check
 
-SSH in and verify the instance is in a good state before deploying:
+SSH in and verify the instance is in a good state before deploying. Use `<install_path>` and `<service_check>` from the registry:
 
 ```bash
 ssh -i /workspace/extra/ssh-keys/<key> -o StrictHostKeyChecking=no <user>@<ip> bash -s << 'PRECHECK'
 echo "=== Current commit ==="
-cd /opt/nanoclaw && git log --oneline -1
+cd <install_path> && git log --oneline -1
 
 echo "=== Working tree clean? ==="
-cd /opt/nanoclaw && git status --porcelain
+cd <install_path> && git status --porcelain
 
 echo "=== Service status ==="
-systemctl is-active nanoclaw
+<service_check>
 
 echo "=== Disk space ==="
 df -h / | tail -1
@@ -50,12 +55,12 @@ If the working tree is dirty, warn the user and ask whether to proceed (changes 
 
 ### 3. Deploy
 
-Execute the deployment via SSH:
+Execute the deployment via SSH. Substitute `<install_path>`, `<service_restart>`, and `<service_check>` with the values from the registry:
 
 ```bash
 ssh -i /workspace/extra/ssh-keys/<key> -o StrictHostKeyChecking=no <user>@<ip> bash -s << 'DEPLOY'
 set -e
-cd /opt/nanoclaw
+cd <install_path>
 
 echo "=== Stashing any local changes ==="
 git stash 2>/dev/null || true
@@ -75,13 +80,13 @@ echo "=== Rebuilding container ==="
 ./container/build.sh 2>/dev/null || echo "No container build script"
 
 echo "=== Restarting service ==="
-systemctl restart nanoclaw
+<service_restart>
 
 echo "=== Waiting for startup ==="
 sleep 5
 
 echo "=== Service status ==="
-systemctl is-active nanoclaw
+<service_check>
 
 echo "=== New commit ==="
 git log --oneline -1
@@ -90,21 +95,22 @@ DEPLOY
 
 ### 4. Post-Deploy Verification
 
-Verify the deployment was successful:
+Verify the deployment was successful. Use `<service_check>` from the registry:
 
 ```bash
 ssh -i /workspace/extra/ssh-keys/<key> -o StrictHostKeyChecking=no <user>@<ip> bash -s << 'VERIFY'
 echo "=== Service running? ==="
-systemctl is-active nanoclaw
+<service_check>
 
 echo "=== Health check ==="
 curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health 2>/dev/null || echo "no health endpoint"
 
 echo "=== Recent logs (last 30s) ==="
-journalctl -u nanoclaw --since "30 seconds ago" --no-pager 2>/dev/null | tail -10
+journalctl --user --since "30 seconds ago" --no-pager 2>/dev/null | tail -10 || \
+journalctl --since "30 seconds ago" --no-pager 2>/dev/null | tail -10
 
 echo "=== Process running? ==="
-ps aux | grep -E "node.*nanoclaw" | grep -v grep | head -3
+ps aux | grep -E "node.*index" | grep -v grep | head -3
 VERIFY
 ```
 
@@ -120,18 +126,18 @@ Update `last_checked` in the instance registry.
 
 ## Rollback
 
-If the deployment fails:
+If the deployment fails, use `<install_path>`, `<service_restart>`, and `<service_check>` from the registry:
 
 ```bash
 ssh -i /workspace/extra/ssh-keys/<key> -o StrictHostKeyChecking=no <user>@<ip> bash -s << 'ROLLBACK'
-cd /opt/nanoclaw
+cd <install_path>
 echo "=== Rolling back to previous commit ==="
 git checkout HEAD~1
 npm install --production
 npm run build
-systemctl restart nanoclaw
+<service_restart>
 sleep 5
-systemctl is-active nanoclaw
+<service_check>
 ROLLBACK
 ```
 
@@ -147,9 +153,17 @@ When deploying to multiple instances:
 
 Never deploy to all production instances simultaneously.
 
-## Deploy Path
+## Instance Configuration Fields
 
-The default NanoClaw installation path on VPS instances is `/opt/nanoclaw`. If an instance uses a different path, it should be noted in the instance registry's `notes` field.
+The instance registry (`/workspace/group/instance-registry.json`) supports these fields to customize deployment per instance:
+
+| Field | Default | Description |
+|---|---|---|
+| `install_path` | `/opt/nanoclaw` | Filesystem path where NanoClaw is installed |
+| `service_restart` | `systemctl restart nanoclaw` | Full command to restart the service |
+| `service_check` | `systemctl is-active nanoclaw` | Full command to check if the service is running |
+
+Always read these from the registry and substitute them into all SSH commands — never hardcode `/opt/nanoclaw` or `systemctl restart nanoclaw`.
 
 ## Principles
 
@@ -158,3 +172,4 @@ The default NanoClaw installation path on VPS instances is `/opt/nanoclaw`. If a
 - **Verify after deploy.** Always check that the service came back up.
 - **Rollback on failure.** If the service doesn't start, rollback immediately.
 - **Sequential for production.** Never deploy to all production instances at once.
+- **Use registry values.** Always use `install_path`, `service_restart`, and `service_check` from the instance registry — never hardcode paths or service names.
