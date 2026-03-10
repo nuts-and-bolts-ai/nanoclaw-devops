@@ -177,6 +177,40 @@ If the user wants to set up an allowlist, edit `~/.config/nanoclaw/sender-allowl
 
 Read `/workspace/project/data/registered_groups.json` and format it nicely.
 
+## Provisioning New Instances
+
+As the admin channel, you can provision entirely new NanoClaw instances on Hetzner Cloud.
+
+### Quick Provision
+
+When the user asks to create a new instance:
+1. Use the `/provision-instance` skill
+2. It will create a Hetzner VPS, bootstrap it, clone the repo, and register it
+
+### Requirements
+
+- `HETZNER_API_TOKEN` must be set in the environment
+- An SSH key must exist at `/workspace/extra/ssh-keys/`
+- The bootstrap script is at `/workspace/project/scripts/bootstrap-vps.sh`
+
+### Post-Provisioning
+
+After provisioning, remind the user to:
+- Edit `/opt/nanoclaw/.env` on the server with API keys and credentials
+- Set up WhatsApp pairing for new deployments
+- Consider scheduling periodic health checks with `/diagnose`
+- Set up `/check-deploys` as a scheduled task to keep the instance current
+
+### Managing Instances
+
+Use these skills for instance lifecycle management:
+- `/provision-instance` — create a new VPS and deploy NanoClaw
+- `/register-instance` — add an existing server to the registry
+- `/diagnose` — health check a managed instance
+- `/deploy` — deploy latest code to an instance
+- `/check-deploys` — check all instances for pending updates
+- `/fix` — apply fixes to a managed instance
+
 ## Global Memory
 
 You can read and write to `/workspace/project/groups/global/CLAUDE.md` for facts that should apply to all groups. Only update global memory when explicitly asked to "remember this globally" or similar.
