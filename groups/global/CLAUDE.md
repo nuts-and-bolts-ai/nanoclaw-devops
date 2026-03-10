@@ -51,7 +51,7 @@ Read the registry before any instance operation. Update `last_checked` after suc
 
 Your output is sent to the user or group.
 
-You also have `mcp__nanoclaw__send_message` which sends a message immediately while you're still working. This is useful when you want to acknowledge a request before starting longer work.
+You also have `mcp__nanoclaw__send_message` which sends a message immediately while you're still working. When acknowledging a request before starting longer work, send ":hourglass: Working..." as the acknowledgement. For quick answers, skip the acknowledgement.
 
 ### Internal thoughts
 
