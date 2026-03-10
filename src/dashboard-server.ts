@@ -47,7 +47,8 @@ export function startDashboardServer(): Promise<void> {
       res.end(page.html);
     });
 
-    server.listen(DASHBOARD_PORT, '0.0.0.0', () => {
+    const bindHost = process.env.DASHBOARD_BIND_HOST || '127.0.0.1';
+    server.listen(DASHBOARD_PORT, bindHost, () => {
       logger.info({ port: DASHBOARD_PORT }, 'Dashboard server started');
       resolve();
     });
@@ -75,8 +76,7 @@ export function createDashboardPage(data: object): string {
     expiresAt: now + DASHBOARD_TTL_MS,
   });
 
-  // Use VPS IP from CLAUDE.md, or allow override via env
-  const host = process.env.DASHBOARD_HOST || '5.78.144.214';
+  const host = process.env.DASHBOARD_HOST || 'localhost';
   return `http://${host}:${DASHBOARD_PORT}/dash/${token}`;
 }
 
