@@ -6,7 +6,9 @@ import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+import { readEnvFile } from './env.js';
 import {
+  CLAUDE_MODEL,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -16,7 +18,7 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
-import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
+import { resolveGroupFolderPath, resolveGroupIpcPath, resolveThreadGroupPath, resolveThreadIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
   CONTAINER_HOST_GATEWAY,
@@ -41,6 +43,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  threadTs?: string; // Slack thread parent timestamp — when set, container uses thread-scoped mounts
 }
 
 export interface ContainerOutput {
@@ -59,10 +62,15 @@ interface VolumeMount {
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
-): VolumeMount[] {
+  threadTs?: string,
+): { mounts: VolumeMount[]; skillsChanged: boolean } {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
   const groupDir = resolveGroupFolderPath(group.folder);
+
+  // Thread-scoped directories (when processing a specific Slack thread)
+  const threadGroupDir = threadTs ? resolveThreadGroupPath(group.folder, threadTs) : null;
+  const threadIpcDir = threadTs ? resolveThreadIpcPath(group.folder, threadTs) : null;
 
   if (isMain) {
     // Main gets the project root read-only. Writable paths the agent needs
@@ -94,12 +102,27 @@ function buildVolumeMounts(
       readonly: false,
     });
   } else {
-    // Other groups only get their own folder
-    mounts.push({
-      hostPath: groupDir,
-      containerPath: '/workspace/group',
-      readonly: false,
-    });
+    if (threadGroupDir) {
+      // Thread session: isolated write dir + shared group knowledge
+      fs.mkdirSync(threadGroupDir, { recursive: true });
+      mounts.push({
+        hostPath: threadGroupDir,
+        containerPath: '/workspace/group',
+        readonly: false,
+      });
+      mounts.push({
+        hostPath: groupDir,
+        containerPath: '/workspace/extra/group-shared',
+        readonly: true,
+      });
+    } else {
+      // Non-threaded: group folder is the working directory
+      mounts.push({
+        hostPath: groupDir,
+        containerPath: '/workspace/group',
+        readonly: false,
+      });
+    }
 
     // Global memory directory (read-only for non-main)
     // Only directory mounts are supported, not file mounts
@@ -122,7 +145,16 @@ function buildVolumeMounts(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
-  const settingsFile = path.join(groupSessionsDir, 'settings.json');
+
+  // For thread sessions, use thread-scoped sessions directory
+  const effectiveSessionsDir = threadTs
+    ? path.join(DATA_DIR, 'sessions', group.folder, 'threads', threadTs, '.claude')
+    : groupSessionsDir;
+  if (threadTs) {
+    fs.mkdirSync(effectiveSessionsDir, { recursive: true });
+  }
+
+  const settingsFile = path.join(effectiveSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
       settingsFile,
@@ -147,6 +179,8 @@ function buildVolumeMounts(
   }
 
   // Sync skills from container/skills/ into each group's .claude/skills/
+  // Track whether skills changed so we can invalidate sessions when they do.
+  let skillsChanged = false;
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
@@ -154,23 +188,34 @@ function buildVolumeMounts(
       const srcDir = path.join(skillsSrc, skillDir);
       if (!fs.statSync(srcDir).isDirectory()) continue;
       const dstDir = path.join(skillsDst, skillDir);
+      // Detect changes by comparing source and destination modification times
+      if (!fs.existsSync(dstDir)) {
+        skillsChanged = true;
+      }
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
+
+  // For thread sessions, copy skills into the thread sessions dir too
+  if (threadTs && fs.existsSync(path.join(groupSessionsDir, 'skills'))) {
+    const threadSkillsDst = path.join(effectiveSessionsDir, 'skills');
+    fs.cpSync(path.join(groupSessionsDir, 'skills'), threadSkillsDst, { recursive: true });
+  }
+
   mounts.push({
-    hostPath: groupSessionsDir,
+    hostPath: effectiveSessionsDir,
     containerPath: '/home/node/.claude',
     readonly: false,
   });
 
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
-  const groupIpcDir = resolveGroupIpcPath(group.folder);
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  const effectiveIpcDir = threadIpcDir || resolveGroupIpcPath(group.folder);
+  fs.mkdirSync(path.join(effectiveIpcDir, 'messages'), { recursive: true });
+  fs.mkdirSync(path.join(effectiveIpcDir, 'tasks'), { recursive: true });
+  fs.mkdirSync(path.join(effectiveIpcDir, 'input'), { recursive: true });
   mounts.push({
-    hostPath: groupIpcDir,
+    hostPath: effectiveIpcDir,
     containerPath: '/workspace/ipc',
     readonly: false,
   });
@@ -209,7 +254,7 @@ function buildVolumeMounts(
     mounts.push(...validatedMounts);
   }
 
-  return mounts;
+  return { mounts, skillsChanged };
 }
 
 function buildContainerArgs(
@@ -237,6 +282,17 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Pass model override if configured (e.g. claude-opus-4-6)
+  if (CLAUDE_MODEL) {
+    args.push('-e', `CLAUDE_MODEL=${CLAUDE_MODEL}`);
+  }
+
+  // Pass GitHub token so containers can use gh CLI for PRs
+  const { GH_TOKEN: ghToken } = readEnvFile(['GH_TOKEN']);
+  if (ghToken) {
+    args.push('-e', `GH_TOKEN=${ghToken}`);
   }
 
   // Runtime-specific args for host gateway resolution
@@ -283,7 +339,10 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const { mounts, skillsChanged } = buildVolumeMounts(group, input.isMain, input.threadTs);
+  if (skillsChanged) {
+    input.sessionId = undefined;
+  }
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(mounts, containerName, input.isMain);
